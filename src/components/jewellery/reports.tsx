@@ -3,359 +3,227 @@
 import * as React from 'react'
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell,
-  LineChart, Line, Legend,
+  LineChart, Line, PieChart, Pie,
 } from 'recharts'
-import {
-  BarChart3, TrendingUp, ReceiptIndianRupee, Package, Gem, Download,
-} from 'lucide-react'
+import { BarChart3, TrendingUp, Coins, Hammer, ReceiptIndianRupee, Download, Users as UsersIcon, ShoppingCart } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useJewelleryStore, formatCurrency, formatCompact } from '@/lib/store'
-import {
-  Tabs, TabsContent, TabsList, TabsTrigger,
-} from '@/components/ui/tabs'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useJewelleryStore, formatCurrency, formatCompact, formatDate, isOverdue } from '@/lib/store'
 
 export function ReportsView() {
-  const { sales, inventory, exchanges, settings } = useJewelleryStore()
+  const { sales, purchases, goldStock, products, workOrders, users, customers, wastageRecords, settings } = useJewelleryStore()
 
-  // Sales by month (last 6 months)
-  const monthlyData = React.useMemo(() => {
-    const now = new Date()
-    const months: { label: string; total: number; bills: number; gst: number }[] = []
+  // Monthly sales (6 months)
+  const monthlySales = React.useMemo(() => {
+    const months: { label: string; total: number; bills: number }[] = []
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const d = new Date(new Date().getFullYear(), new Date().getMonth() - i, 1)
       const end = new Date(d.getFullYear(), d.getMonth() + 1, 1)
-      const ms = sales.filter((s) => {
-        const sd = new Date(s.createdAt)
-        return sd >= d && sd < end
-      })
-      months.push({
-        label: d.toLocaleDateString('en-IN', { month: 'short' }),
-        total: ms.reduce((sum, s) => sum + s.grandTotal, 0),
-        bills: ms.length,
-        gst: ms.reduce((sum, s) => sum + s.gstAmount, 0),
-      })
+      const ms = sales.filter((s) => { const sd = new Date(s.createdAt); return sd >= d && sd < end })
+      months.push({ label: d.toLocaleDateString('en-IN', { month: 'short' }), total: ms.reduce((sum, s) => sum + s.grandTotal, 0), bills: ms.length })
     }
     return months
   }, [sales])
 
-  // Sales by category (last 30 days)
-  const categoryData = React.useMemo(() => {
-    const cutoff = new Date(Date.now() - 30 * 86400000)
+  // Monthly purchases
+  const monthlyPurchases = React.useMemo(() => {
+    const months: { label: string; total: number }[] = []
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(new Date().getFullYear(), new Date().getMonth() - i, 1)
+      const end = new Date(d.getFullYear(), d.getMonth() + 1, 1)
+      const total = purchases.filter((p) => { const pd = new Date(p.purchaseDate); return pd >= d && pd < end }).reduce((sum, p) => sum + p.grandTotal, 0)
+      months.push({ label: d.toLocaleDateString('en-IN', { month: 'short' }), total })
+    }
+    return months
+  }, [purchases])
+
+  // Gold by purity
+  const goldByPurity = React.useMemo(() => {
     const map = new Map<string, number>()
-    sales.filter((s) => new Date(s.createdAt) >= cutoff).forEach((s) => {
-      s.items.forEach((it) => {
-        const cat = it.metal
-        map.set(cat, (map.get(cat) ?? 0) + it.subtotal * it.quantity)
-      })
+    goldStock.filter((g) => g.status === 'AVAILABLE').forEach((g) => map.set(g.purity, (map.get(g.purity) ?? 0) + g.grossWeight))
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
+  }, [goldStock])
+
+  // Employee performance
+  const employeePerf = React.useMemo(() => {
+    return users.filter((u) => u.role === 'STAFF').map((u) => {
+      const assigned = workOrders.filter((w) => w.steps.some((s) => s.assignedTo === u.id))
+      const completed = assigned.filter((w) => w.steps.some((s) => s.assignedTo === u.id && (s.status === 'COMPLETED' || s.status === 'APPROVED')))
+      const pending = assigned.filter((w) => w.steps.some((s) => s.assignedTo === u.id && (s.status === 'PENDING' || s.status === 'ASSIGNED' || s.status === 'IN_PROGRESS')))
+      const overdue = assigned.filter((w) => isOverdue(w.expectedCompletion) && w.steps.some((s) => s.assignedTo === u.id && s.status !== 'COMPLETED' && s.status !== 'APPROVED' && s.status !== 'CANCELLED'))
+      return { user: u, assigned: assigned.length, completed: completed.length, pending: pending.length, overdue: overdue.length }
     })
-    const colors: Record<string, string> = {
-      GOLD: 'var(--chart-1)', SILVER: 'var(--chart-2)', DIAMOND: 'var(--chart-3)',
-      PLATINUM: 'var(--chart-4)', OTHER: 'var(--chart-5)',
-    }
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value, color: colors[name] ?? 'var(--chart-5)' }))
-      .sort((a, b) => b.value - a.value)
-  }, [sales])
+  }, [users, workOrders])
 
-  // Stock by category
-  const stockByCat = React.useMemo(() => {
-    const map = new Map<string, { count: number; value: number }>()
-    inventory.forEach((it) => {
-      const prev = map.get(it.category) ?? { count: 0, value: 0 }
-      prev.count += it.stock
-      prev.value += it.costPrice * it.stock
-      map.set(it.category, prev)
-    })
-    return Array.from(map.entries())
-      .map(([name, v]) => ({ name, ...v }))
-      .sort((a, b) => b.value - a.value)
-  }, [inventory])
+  // Wastage summary
+  const wastageSummary = React.useMemo(() => {
+    const totalInput = wastageRecords.reduce((s, w) => s + w.inputWeight, 0)
+    const totalWastage = wastageRecords.reduce((s, w) => s + w.wastageWeight, 0)
+    return { totalInput, totalWastage, pct: totalInput > 0 ? (totalWastage / totalInput) * 100 : 0 }
+  }, [wastageRecords])
 
-  // GST summary
-  const gstData = React.useMemo(() => {
-    const cutoff = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-    const ms = sales.filter((s) => new Date(s.createdAt) >= cutoff && s.status !== 'CANCELLED')
-    const taxable = ms.reduce((s, x) => s + x.subTotal, 0)
-    const cgst = ms.reduce((s, x) => s + x.gstAmount / 2, 0)
-    const sgst = cgst
-    const igst = 0 // intra-state assumed
-    const totalTax = ms.reduce((s, x) => s + x.gstAmount, 0)
-    const grandTotal = ms.reduce((s, x) => s + x.grandTotal, 0)
-    return { taxable, cgst, sgst, igst, totalTax, grandTotal, billCount: ms.length }
-  }, [sales])
+  const handleExportSales = () => {
+    const rows = [['Invoice', 'Date', 'Customer', 'Phone', 'Subtotal', 'GST', 'Grand Total', 'Paid', 'Due', 'Status', 'Payment Mode'],
+      ...sales.map((s) => [s.invoiceNo, formatDate(s.createdAt), s.customerName, s.customerPhone, s.subtotal, s.totalGst, s.grandTotal, s.paidAmount, s.dueAmount, s.status, s.paymentMode])]
+    downloadCSV(rows, 'sales-report')
+  }
 
-  // Top selling items (30d)
-  const topItems = React.useMemo(() => {
-    const cutoff = new Date(Date.now() - 30 * 86400000)
-    const map = new Map<string, { name: string; qty: number; total: number }>()
-    sales.filter((s) => new Date(s.createdAt) >= cutoff).forEach((s) => {
-      s.items.forEach((it) => {
-        const prev = map.get(it.itemId) ?? { name: it.name, qty: 0, total: 0 }
-        prev.qty += it.quantity
-        prev.total += it.subtotal * it.quantity
-        map.set(it.itemId, prev)
-      })
-    })
-    return Array.from(map.values()).sort((a, b) => b.total - a.total).slice(0, 6)
-  }, [sales])
+  const handleExportWorkOrders = () => {
+    const rows = [['Work ID', 'Product', 'Status', 'Priority', 'Assigned To', 'Start Date', 'Expected Completion', 'Gross Weight', 'Purity'],
+      ...workOrders.map((w) => [w.workId, w.productName, w.status, w.priority, w.assignedToName ?? '-', formatDate(w.startDate), formatDate(w.expectedCompletion), w.grossWeight, w.purity])]
+    downloadCSV(rows, 'work-orders-report')
+  }
 
-  // Exchange value over last 6 months
-  const exchangeMonthly = React.useMemo(() => {
-    const now = new Date()
-    const months: { label: string; value: number }[] = []
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 1)
-      const v = exchanges
-        .filter((e) => { const ed = new Date(e.createdAt); return ed >= d && ed < end })
-        .reduce((s, e) => s + e.totalValue, 0)
-      months.push({ label: d.toLocaleDateString('en-IN', { month: 'short' }), value: v })
-    }
-    return months
-  }, [exchanges])
-
-  const handleExportCSV = () => {
-    const rows = [
-      ['Invoice No', 'Date', 'Customer', 'Phone', 'Sub Total', 'GST', 'Old Gold Adj', 'Discount', 'Grand Total', 'Status', 'Payment'],
-      ...sales.map((s) => [
-        s.invoiceNo,
-        new Date(s.createdAt).toLocaleDateString('en-IN'),
-        s.customerName,
-        s.customerPhone,
-        s.subTotal,
-        s.gstAmount,
-        s.oldGoldAdjustment,
-        s.discount,
-        s.grandTotal,
-        s.status,
-        s.paymentMode,
-      ]),
-    ]
-    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `ss-jewellery-sales-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  const handleExportGold = () => {
+    const rows = [['Stock ID', 'Material', 'Purity', 'Gross Weight', 'Fine Gold', 'Supplier', 'Purchase Date', 'Value', 'Status', 'Location'],
+      ...goldStock.map((g) => [g.stockId, g.materialType, g.purity, g.grossWeight, g.fineGoldWeight.toFixed(2), g.supplierName ?? '-', formatDate(g.purchaseDate), g.purchaseValue, g.status, g.currentLocation])]
+    downloadCSV(rows, 'gold-stock-report')
   }
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <BarChart3 className="h-5 w-5 text-primary" />
-            Reports & Analytics
-          </h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Sales, stock and GST insights
-          </p>
+          <h2 className="text-xl font-bold flex items-center gap-2"><BarChart3 className="h-5 w-5 text-primary" /> Reports &amp; Analytics</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">Sales, inventory, production &amp; employee performance</p>
         </div>
-        <Button variant="outline" onClick={handleExportCSV} className="shrink-0">
-          <Download className="h-4 w-4 mr-1.5" />
-          Export CSV
-        </Button>
       </div>
 
       <Tabs defaultValue="sales">
-        <TabsList className="grid grid-cols-3 w-full max-w-md">
+        <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full">
           <TabsTrigger value="sales">Sales</TabsTrigger>
-          <TabsTrigger value="stock">Stock</TabsTrigger>
+          <TabsTrigger value="inventory">Inventory</TabsTrigger>
+          <TabsTrigger value="production">Production</TabsTrigger>
+          <TabsTrigger value="employees">Employees</TabsTrigger>
           <TabsTrigger value="gst">GST</TabsTrigger>
         </TabsList>
 
-        {/* === Sales tab === */}
+        {/* Sales */}
         <TabsContent value="sales" className="space-y-4 mt-3">
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={handleExportSales}><Download className="h-4 w-4 mr-1.5" /> Export Sales CSV</Button>
+          </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <Card><CardContent className="p-3">
-              <p className="text-[11px] text-muted-foreground">Total Sales (6mo)</p>
-              <p className="text-base md:text-lg font-bold mt-0.5">{formatCompact(monthlyData.reduce((s, m) => s + m.total, 0), settings.currency)}</p>
-            </CardContent></Card>
-            <Card><CardContent className="p-3">
-              <p className="text-[11px] text-muted-foreground">Total Bills (6mo)</p>
-              <p className="text-base md:text-lg font-bold mt-0.5">{monthlyData.reduce((s, m) => s + m.bills, 0)}</p>
-            </CardContent></Card>
-            <Card><CardContent className="p-3">
-              <p className="text-[11px] text-muted-foreground">Avg Bill Value</p>
-              <p className="text-base md:text-lg font-bold mt-0.5">{formatCompact(
-                monthlyData.reduce((s, m) => s + m.total, 0) / Math.max(1, monthlyData.reduce((s, m) => s + m.bills, 0)),
-                settings.currency,
-              )}</p>
-            </CardContent></Card>
-            <Card><CardContent className="p-3">
-              <p className="text-[11px] text-muted-foreground">Best Month</p>
-              <p className="text-base md:text-lg font-bold mt-0.5">
-                {monthlyData.reduce((max, m) => m.total > max.total ? m : max, monthlyData[0])?.label ?? '-'}
-              </p>
-            </CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Total Sales (6mo)</p><p className="text-base md:text-lg font-bold mt-0.5">{formatCompact(monthlySales.reduce((s, m) => s + m.total, 0), settings.currency)}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Total Bills (6mo)</p><p className="text-base md:text-lg font-bold mt-0.5">{monthlySales.reduce((s, m) => s + m.bills, 0)}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Avg Bill Value</p><p className="text-base md:text-lg font-bold mt-0.5">{formatCompact(monthlySales.reduce((s, m) => s + m.total, 0) / Math.max(1, monthlySales.reduce((s, m) => s + m.bills, 0)), settings.currency)}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Outstanding</p><p className="text-base md:text-lg font-bold mt-0.5 text-rose-600 dark:text-rose-400">{formatCompact(sales.reduce((s, x) => s + x.dueAmount, 0), settings.currency)}</p></CardContent></Card>
           </div>
-
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <TrendingUp className="h-4 w-4" /> Monthly Sales (6 Months)
-              </CardTitle>
-              <CardDescription className="text-xs">Revenue trend across months</CardDescription>
-            </CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Monthly Sales vs Purchase</CardTitle><CardDescription className="text-xs">6-month comparison</CardDescription></CardHeader>
             <CardContent>
               <div className="h-[260px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={monthlyData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                  <BarChart data={monthlySales.map((m, i) => ({ label: m.label, sales: m.total, purchase: monthlyPurchases[i].total }))} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                     <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
                     <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickFormatter={(v) => formatCompact(v, '')} />
-                    <Tooltip
-                      contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--popover-foreground)' }}
-                      formatter={(v: number, n) => [formatCurrency(v, settings.currency), n === 'total' ? 'Revenue' : n]}
-                    />
-                    <Bar dataKey="total" name="Revenue" fill="var(--chart-1)" radius={[6, 6, 0, 0]} />
+                    <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--popover-foreground)' }} formatter={(v: number, n) => [formatCurrency(v, settings.currency), n === 'sales' ? 'Sales' : 'Purchase']} />
+                    <Bar dataKey="sales" name="sales" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="purchase" name="purchase" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Sales by Metal (30d)</CardTitle>
-                <CardDescription className="text-xs">Revenue distribution</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="h-[220px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={categoryData} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-                      <XAxis type="number" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickFormatter={(v) => formatCompact(v, '')} />
-                      <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} width={70} />
-                      <Tooltip
-                        contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--popover-foreground)' }}
-                        formatter={(v: number) => [formatCurrency(v, settings.currency), 'Revenue']}
-                      />
-                      <Bar dataKey="value" name="Revenue" radius={[0, 6, 6, 0]}>
-                        {categoryData.map((entry, idx) => <Cell key={idx} fill={entry.color} />)}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
+        {/* Inventory */}
+        <TabsContent value="inventory" className="space-y-4 mt-3">
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={handleExportGold}><Download className="h-4 w-4 mr-1.5" /> Export Gold CSV</Button>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Total Gold (Gross)</p><p className="text-base md:text-lg font-bold mt-0.5">{goldStock.filter((g) => g.status === 'AVAILABLE').reduce((s, g) => s + g.grossWeight, 0).toFixed(2)}g</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Fine Gold</p><p className="text-base md:text-lg font-bold mt-0.5 text-primary">{goldStock.filter((g) => g.status === 'AVAILABLE').reduce((s, g) => s + g.fineGoldWeight, 0).toFixed(2)}g</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Finished Stock Value</p><p className="text-base md:text-lg font-bold mt-0.5">{formatCompact(products.reduce((s, p) => s + p.costPrice * p.stock, 0), settings.currency)}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Low Stock Items</p><p className="text-base md:text-lg font-bold mt-0.5 text-amber-600 dark:text-amber-400">{products.filter((p) => p.stock <= 2).length}</p></CardContent></Card>
+          </div>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Coins className="h-4 w-4" /> Gold Stock by Purity</CardTitle></CardHeader>
+            <CardContent>
+              <div className="h-[260px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={goldByPurity} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickFormatter={(v) => `${v}g`} />
+                    <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--popover-foreground)' }} formatter={(v: number) => [`${v}g`, 'Gross Weight']} />
+                    <Bar dataKey="value" name="Weight" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Top Items (30d)</CardTitle>
-                <CardDescription className="text-xs">Best sellers by revenue</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {topItems.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-6 text-center">No sales in last 30 days</p>
-                ) : (
-                  <div className="space-y-2">
-                    {topItems.map((it, idx) => (
-                      <div key={idx} className="flex items-center gap-2 py-1.5 border-b border-border last:border-0">
-                        <span className="h-6 w-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">
-                          {idx + 1}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{it.name}</p>
-                          <p className="text-[11px] text-muted-foreground">{it.qty} units sold</p>
-                        </div>
-                        <span className="text-sm font-semibold shrink-0">{formatCurrency(it.total, settings.currency)}</span>
+        {/* Production */}
+        <TabsContent value="production" className="space-y-4 mt-3">
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={handleExportWorkOrders}><Download className="h-4 w-4 mr-1.5" /> Export Work Orders CSV</Button>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Total Work Orders</p><p className="text-base md:text-lg font-bold mt-0.5">{workOrders.length}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Completed</p><p className="text-base md:text-lg font-bold mt-0.5 text-emerald-600 dark:text-emerald-400">{workOrders.filter((w) => w.status === 'APPROVED' || w.status === 'COMPLETED').length}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Overdue</p><p className="text-base md:text-lg font-bold mt-0.5 text-rose-600 dark:text-rose-400">{workOrders.filter((w) => isOverdue(w.expectedCompletion) && w.status !== 'APPROVED' && w.status !== 'COMPLETED' && w.status !== 'CANCELLED').length}</p></CardContent></Card>
+            <Card><CardContent className="p-3"><p className="text-[11px] text-muted-foreground">Total Wastage</p><p className="text-base md:text-lg font-bold mt-0.5 text-amber-600 dark:text-amber-400">{wastageSummary.totalWastage.toFixed(3)}g ({wastageSummary.pct.toFixed(2)}%)</p></CardContent></Card>
+          </div>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Wastage by Process</CardTitle><CardDescription className="text-xs">Total: {wastageSummary.totalWastage.toFixed(3)}g ({wastageSummary.pct.toFixed(2)}% of input)</CardDescription></CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {Array.from(new Set(wastageRecords.map((w) => w.stepName))).map((step) => {
+                  const records = wastageRecords.filter((w) => w.stepName === step)
+                  const totalWaste = records.reduce((s, w) => s + w.wastageWeight, 0)
+                  const totalInput = records.reduce((s, w) => s + w.inputWeight, 0)
+                  const pct = totalInput > 0 ? (totalWaste / totalInput) * 100 : 0
+                  return (
+                    <div key={step} className="flex items-center justify-between p-2 rounded-lg bg-muted/30 text-sm">
+                      <span className="font-medium">{step}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground">{records.length} records</span>
+                        <span className="text-rose-600 dark:text-rose-400 font-medium tabular-nums">{totalWaste.toFixed(3)}g</span>
+                        <Badge variant="outline" className="text-[10px]">{pct.toFixed(2)}%</Badge>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Gem className="h-4 w-4" /> Old Gold Buy / Exchange
-              </CardTitle>
-              <CardDescription className="text-xs">Monthly value (last 6 months)</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[200px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={exchangeMonthly} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
-                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickFormatter={(v) => formatCompact(v, '')} />
-                    <Tooltip
-                      contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--popover-foreground)' }}
-                      formatter={(v: number) => [formatCurrency(v, settings.currency), 'Value']}
-                    />
-                    <Line type="monotone" dataKey="value" stroke="var(--chart-2)" strokeWidth={2} dot={{ r: 4, fill: 'var(--chart-2)' }} name="Value" />
-                  </LineChart>
-                </ResponsiveContainer>
+                    </div>
+                  )
+                })}
+                {wastageRecords.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">No wastage records</p>}
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* === Stock tab === */}
-        <TabsContent value="stock" className="space-y-4 mt-3">
+        {/* Employees */}
+        <TabsContent value="employees" className="space-y-4 mt-3">
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Package className="h-4 w-4" /> Stock Value by Category
-              </CardTitle>
-              <CardDescription className="text-xs">Cost value distribution</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[260px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stockByCat} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} interval={0} angle={-15} textAnchor="end" height={50} />
-                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickFormatter={(v) => formatCompact(v, '')} />
-                    <Tooltip
-                      contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--popover-foreground)' }}
-                      formatter={(v: number, n) => [n === 'value' ? formatCurrency(v, settings.currency) : v, n === 'value' ? 'Stock Value' : 'Units']}
-                    />
-                    <Bar dataKey="value" name="value" fill="var(--chart-1)" radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Detailed Stock Breakdown</CardTitle>
-              <CardDescription className="text-xs">Per category with units & value</CardDescription>
-            </CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><UsersIcon className="h-4 w-4" /> Employee Performance</CardTitle><CardDescription className="text-xs">Work statistics per staff member</CardDescription></CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 text-muted-foreground">
                     <tr>
-                      <th className="text-left font-medium px-3 py-2">Category</th>
-                      <th className="text-right font-medium px-3 py-2">Units</th>
-                      <th className="text-right font-medium px-3 py-2">Cost Value</th>
-                      <th className="text-right font-medium px-3 py-2">Avg / Unit</th>
+                      <th className="text-left font-medium px-3 py-2">Employee</th>
+                      <th className="text-left font-medium px-3 py-2">Specialty</th>
+                      <th className="text-center font-medium px-3 py-2">Assigned</th>
+                      <th className="text-center font-medium px-3 py-2">Completed</th>
+                      <th className="text-center font-medium px-3 py-2">Pending</th>
+                      <th className="text-center font-medium px-3 py-2">Overdue</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {stockByCat.map((row) => (
-                      <tr key={row.name} className="border-b border-border last:border-0">
-                        <td className="px-3 py-2"><Badge variant="outline" className="text-xs">{row.name}</Badge></td>
-                        <td className="px-3 py-2 text-right tabular-nums">{row.count}</td>
-                        <td className="px-3 py-2 text-right tabular-nums font-medium">{formatCurrency(row.value, settings.currency)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{formatCurrency(row.count ? row.value / row.count : 0, settings.currency)}</td>
+                    {employeePerf.map((e) => (
+                      <tr key={e.user.id} className="border-b border-border last:border-0">
+                        <td className="px-3 py-2"><p className="font-medium text-sm">{e.user.name}</p><p className="text-[10px] text-muted-foreground">@{e.user.username}</p></td>
+                        <td className="px-3 py-2 text-xs">{e.user.specialty ?? '-'}</td>
+                        <td className="px-3 py-2 text-center tabular-nums">{e.assigned}</td>
+                        <td className="px-3 py-2 text-center"><Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">{e.completed}</Badge></td>
+                        <td className="px-3 py-2 text-center"><Badge variant="secondary" className="text-[10px]">{e.pending}</Badge></td>
+                        <td className="px-3 py-2 text-center"><Badge variant={e.overdue > 0 ? 'destructive' : 'secondary'} className="text-[10px]">{e.overdue}</Badge></td>
                       </tr>
                     ))}
-                    <tr className="bg-muted/30 font-semibold">
-                      <td className="px-3 py-2">Total</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{stockByCat.reduce((s, r) => s + r.count, 0)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(stockByCat.reduce((s, r) => s + r.value, 0), settings.currency)}</td>
-                      <td className="px-3 py-2"></td>
-                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -363,64 +231,52 @@ export function ReportsView() {
           </Card>
         </TabsContent>
 
-        {/* === GST tab === */}
+        {/* GST */}
         <TabsContent value="gst" className="space-y-4 mt-3">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ReceiptIndianRupee className="h-4 w-4" /> GST Summary
-              </CardTitle>
-              <CardDescription className="text-xs">
-                For {new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })} · {gstData.billCount} bills
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                <GstRow label="Taxable Value" value={formatCurrency(gstData.taxable, settings.currency)} />
-                <GstRow label="CGST" value={formatCurrency(gstData.cgst, settings.currency)} />
-                <GstRow label="SGST" value={formatCurrency(gstData.sgst, settings.currency)} />
-                <GstRow label="IGST" value={formatCurrency(gstData.igst, settings.currency)} />
-                <GstRow label="Total Tax" value={formatCurrency(gstData.totalTax, settings.currency)} highlight />
-                <GstRow label="Grand Total" value={formatCurrency(gstData.grandTotal, settings.currency)} />
-              </div>
-              <p className="text-[11px] text-muted-foreground mt-3">
-                * CGST/SGST split assumes intra-state transactions. Adjust IGST for inter-state sales.
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Recent Bills (GST View)</CardTitle>
-              <CardDescription className="text-xs">Latest 10 bills with tax breakdown</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-muted-foreground">
-                    <tr>
-                      <th className="text-left font-medium px-2 py-2">Invoice</th>
-                      <th className="text-left font-medium px-2 py-2">Customer</th>
-                      <th className="text-right font-medium px-2 py-2">Taxable</th>
-                      <th className="text-right font-medium px-2 py-2">GST</th>
-                      <th className="text-right font-medium px-2 py-2">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sales.slice(0, 10).map((s) => (
-                      <tr key={s.id} className="border-b border-border last:border-0">
-                        <td className="px-2 py-2 font-medium">{s.invoiceNo}</td>
-                        <td className="px-2 py-2 truncate max-w-[150px]">{s.customerName}</td>
-                        <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(s.subTotal, settings.currency)}</td>
-                        <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(s.gstAmount, settings.currency)}</td>
-                        <td className="px-2 py-2 text-right tabular-nums font-semibold">{formatCurrency(s.grandTotal, settings.currency)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+          {(() => {
+            const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+            const ms = sales.filter((s) => new Date(s.createdAt) >= monthStart && s.status !== 'CANCELLED')
+            const taxable = ms.reduce((s, x) => s + x.subtotal, 0)
+            const cgst = ms.reduce((s, x) => s + x.totalGst / 2, 0)
+            const sgst = cgst
+            const totalTax = ms.reduce((s, x) => s + x.totalGst, 0)
+            const grandTotal = ms.reduce((s, x) => s + x.grandTotal, 0)
+            return (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <GstRow label="Taxable Value" value={formatCurrency(taxable, settings.currency)} />
+                  <GstRow label="CGST" value={formatCurrency(cgst, settings.currency)} />
+                  <GstRow label="SGST" value={formatCurrency(sgst, settings.currency)} />
+                  <GstRow label="Total Tax" value={formatCurrency(totalTax, settings.currency)} highlight />
+                  <GstRow label="Grand Total" value={formatCurrency(grandTotal, settings.currency)} />
+                  <GstRow label="Bills Count" value={String(ms.length)} />
+                </div>
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-base">Recent Bills (GST View)</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50 text-muted-foreground">
+                          <tr><th className="text-left font-medium px-2 py-2">Invoice</th><th className="text-left font-medium px-2 py-2">Customer</th><th className="text-right font-medium px-2 py-2">Taxable</th><th className="text-right font-medium px-2 py-2">GST</th><th className="text-right font-medium px-2 py-2">Total</th></tr>
+                        </thead>
+                        <tbody>
+                          {sales.slice(0, 10).map((s) => (
+                            <tr key={s.id} className="border-b border-border last:border-0">
+                              <td className="px-2 py-2 font-medium">{s.invoiceNo}</td>
+                              <td className="px-2 py-2 truncate max-w-[150px]">{s.customerName}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(s.subtotal, settings.currency)}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(s.totalGst, settings.currency)}</td>
+                              <td className="px-2 py-2 text-right tabular-nums font-semibold">{formatCurrency(s.grandTotal, settings.currency)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            )
+          })()}
         </TabsContent>
       </Tabs>
     </div>
@@ -428,10 +284,16 @@ export function ReportsView() {
 }
 
 function GstRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className={`rounded-lg p-3 ${highlight ? 'bg-primary/10' : 'bg-muted/40'}`}>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className={`text-base font-bold mt-0.5 ${highlight ? 'text-primary' : ''}`}>{value}</p>
-    </div>
-  )
+  return <div className={`rounded-lg p-3 ${highlight ? 'bg-primary/10' : 'bg-muted/40'}`}><p className="text-[11px] text-muted-foreground">{label}</p><p className={`text-base font-bold mt-0.5 ${highlight ? 'text-primary' : ''}`}>{value}</p></div>
+}
+
+function downloadCSV(rows: (string | number)[][], filename: string) {
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filename}-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
